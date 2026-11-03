@@ -1,0 +1,83 @@
+Screen {
+    background: #080e1b;
+    color: #d9e4f5;
+}
+#masthead {
+    height: 3;
+    padding: 1 2 0 2;
+    background: #101b2e;
+}
+#brand { width: 1fr; text-style: bold; }
+#clock { width: 27; text-align: right; }
+#ribbon { height: 2; padding: 0 2; background: #101b2e; }
+#error-banner { height: auto; max-height: 3; background: #431d31; color: #ffbac9; padding: 0 1; }
+#workspace { height: 1fr; padding: 1 2 0 2; }
+#conversation { width: 1fr; min-width: 26; }
+#chat {
+    height: 1fr;
+    padding: 1 2;
+    border: round #334a69;
+    border-title-color: #7ce7df;
+    scrollbar-size: 1 1;
+    scrollbar-background: #101b2e;
+    scrollbar-color: #3d6479;
+}
+#welcome {
+    height: auto;
+    margin: 2 1;
+    padding: 2;
+    border: round #244352;
+    background: #0c1d2b;
+}
+#compose-box { height: 5; padding-top: 1; }
+#composer {
+    background: #121f32;
+    border: tall #305769;
+    color: #f0f5ff;
+    padding: 0 1;
+}
+#composer:focus { border: tall #5ed9ce; }
+#input-hint { height: 1; color: #69829f; padding: 0 1; }
+#sidebar {
+    width: 62;
+    margin-left: 2;
+    border: round #35375d;
+    background: #0d1525;
+}
+.compact #sidebar { display: none; }
+TabbedContent { height: 1fr; }
+TabPane { padding: 1; }
+Tabs { background: #131c30; }
+Tab { color: #8fa1ba; }
+Tab.-active { color: #b7a7ff; text-style: bold; }
+Underline > .underline--bar { color: #a690ed; }
+#model-card { height: auto; padding: 1; margin-bottom: 1; background: #151e36; border-left: solid #9c88e9; }
+#context-label { height: 1; padding-left: 1; }
+#context-bar { margin: 0 1 1 1; width: 1fr; }
+#usage-card, #runtime-card, #link-card { height: auto; padding: 1; margin-bottom: 1; background: #111d2e; }
+#runtime-card { border-left: solid #4dc3bc; }
+#link-card { border-left: solid #3c587b; }
+.bubble { height: auto; margin: 0 0 1 0; padding: 1 1; background: #101b2d; }
+.bubble.user { border-left: solid #58d6cb; background: #0c222b; }
+.bubble.assistant { border-left: solid #9d88ed; }
+.bubble.system { border-left: solid #d5b367; background: #201f2b; }
+.bubble.error { border-left: solid #f0778d; background: #2f1826; }
+.message-heading { height: 1; margin-bottom: 1; }
+.message-body { height: auto; background: transparent; padding: 0; margin: 0; }
+MarkdownH1, MarkdownH2, MarkdownH3 { margin-top: 0; color: #d7ceff; }
+MarkdownParagraph { margin: 0 0 1 0; }
+MarkdownFence { background: #080f1d; }
+.section-title { height: 2; color: #a998ef; }
+#call-table { height: 13; background: #0e192b; }
+#tools-details { height: 1fr; padding-top: 1; }
+#tool-definitions, #call-detail, #request-detail, #session-detail { height: auto; }
+#call-detail { margin-top: 1; }
+Footer { background: #0f192b; color: #8fa5bd; }
+FooterKey > .footer-key--key { background: #23374c; color: #79e3d7; }
+
+.bubble.tool { border-left: solid #68c79b; background: #102422; }
+.bubble.tool .message-body { color: #b9ded0; }
+#request-table { height: 11; background: #0e192b; }
+#request-scroll { height: 1fr; padding-top: 1; }
+#call-detail { padding: 1; background: #112827; border-left: solid #4dc3a0; }
+#request-detail { padding: 1; background: #171f35; border-left: solid #9c88e9; }
