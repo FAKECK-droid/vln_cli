@@ -8,21 +8,18 @@ import time
 from typing import Callable
 
 from .state import Json, utc_now
+from .presentation import error_text
 
 
 def replaceable_telemetry(previous: Json, current: Json) -> bool:
     """只合并同一状态内的连续全量采样；请求边界、调用、结果和差量文本必须保留。"""
     if current.get("batch_id", 0) <= previous.get("batch_id", 0):
         return False
-    if previous.get("full") and previous.get("batch_id") == 1:
-        return False
     for packet in (previous, current):
         response, tools, session = packet.get("response") or {}, packet.get("tools") or {}, packet.get("session") or {}
         if "request" not in packet or "request_status" not in session or "queue" not in tools:
             return False
         if response.get("id") or response.get("function_calls") or response.get("tool_outputs") or tools.get("finished_calls"):
-            return False
-        if any(part.get("op") != "replace" for part in response.get("messages", [])):
             return False
     before = previous["session"]["request_status"] or {}
     after = current["session"]["request_status"] or {}
@@ -102,7 +99,7 @@ class RosBridge:
         except Exception as error:
             if not self._stop.is_set():
                 with self._lock:
-                    self._errors.append("ROS 接收线程已停止：" + str(error))
+                    self._errors.append(error_text("vln_cli.RosBridge / ROS 接收线程已停止", error))
 
     def _receive(self, message) -> None:
         try:
@@ -119,7 +116,8 @@ class RosBridge:
                 self._last_received = time.monotonic()
         except (ValueError, TypeError) as error:
             with self._lock:
-                self._errors.append(f"输出话题 JSON 无法解析：{error}")
+                self._errors.append(error_text(
+                    f"vln_cli.RosBridge / 输出话题 {self.output_topic} / JSON 解码", error))
 
     def poll(self, receive: Callable[[Json], None], error: Callable[[str], None]) -> None:
         # UI 仅取走已接收更新，不负责驱动 ROS executor。
@@ -132,7 +130,9 @@ class RosBridge:
             try:
                 receive(packet)
             except (ValueError, KeyError, TypeError) as exception:
-                error(f"输出协议无法解析：{exception}")
+                error(error_text(
+                    f"vln_cli.ViewState / 输出协议解析 / {self.output_topic}"
+                    f" / batch_id={packet.get('batch_id')}", exception))
         for message in errors:
             error(message)
 
@@ -168,8 +168,9 @@ class RosBridge:
         except (TransformException, ValueError) as error:
             if not self._pose_warned:
                 with self._lock:
-                    self._errors.append(f"无法获取 {self.pose_frame} → {self.pose_base_frame} 位姿，"
-                                        f"输入将附加 pose: null：{error}")
+                    self._errors.append(error_text(
+                        f"vln_cli.RosBridge / TF {self.pose_frame} → {self.pose_base_frame}"
+                        "（输入将附加 pose: null）", error))
                 self._pose_warned = True
             return None
 
@@ -213,7 +214,6 @@ class DemoBridge:
         self._batch = 0
         self._turn = 0
         self._packets.append(self.packet(
-            full=True,
             request={"model": "gpt-6.1-terra", "reasoning": {"effort": "low"},
                      "max_output_tokens": 8192, "store": True, "parallel_tool_calls": True,
                      "input": [], "prompt_cache_key": "scout-mini-vln"},
@@ -230,13 +230,18 @@ class DemoBridge:
                 "status": {"state": "ready", "running_count": 1, "waiting_count": 0,
                     "max_concurrent_calls": 4, "completed_count": 12},
                 "queue": {"waiting": [], "running": [
-                    {"name": "capture_image", "call_id": "demo-camera", "run_ms": 420}]}}
+                    {"name": "capture_image", "call_id": "demo-camera", "run_ms": 420,
+                     "wait_ms": 0, "sequence": 0, "blocking": False}]}}
         ))
         self._packets.append(self.packet(
             request=None,
+            tools={"queue": {"waiting": [], "running": []},
+                   "finished_calls": [{"call_id": "demo-camera", "name": "capture_image",
+                       "sequence": 0, "blocking": False, "state": "finished",
+                       "wait_ms": 0, "run_ms": 450}]},
             response={"id": "demo-welcome", "status": "completed", "messages": [
                 {"response_id": "demo-welcome", "output_index": 0, "content_index": 0,
-                 "type": "output_text", "op": "append", "text":
+                 "type": "output_text", "text":
                     "### 控制台已就绪\n这是 **离线演示**，没有连接机器人或模型。\n\n"
                     "左侧输入任务，右侧检查会话、工具与原始请求。"
                     "输入 `/model` 查看模型配置，按 **F1** 查看全部指令。"}]}))
@@ -261,12 +266,12 @@ class DemoBridge:
             request={"model": "gpt-6.1-terra", "reasoning": {"effort": "low"},
                      "max_output_tokens": 8192, "input": inputs},
             response={"messages": [{"response_id": identity, "output_index": 0,
-                "content_index": 0, "type": "output_text", "op": "append", "text": "已收到演示输入："}]}))
+                "content_index": 0, "type": "output_text", "text": "已收到演示输入："}]}))
         self._packets.append(self.packet(request=None, response={
             "id": identity, "status": "completed", "messages": [
                 {"response_id": identity, "output_index": 0, "content_index": 0,
-                 "type": "output_text", "op": "append",
-                 "text": instruction + "\n\n当前为演示模式；这条消息没有发送到 ROS 或模型。"}]}))
+                 "type": "output_text",
+                 "text": "已收到演示输入：" + instruction + "\n\n当前为演示模式；这条消息没有发送到 ROS 或模型。"}]}))
 
     def connection(self) -> Json:
         return {"mode": "DEMO", "input_topic": "/vln/user_input",
@@ -280,7 +285,7 @@ class ReplayBridge:
     def __init__(self, path):
         with open(path, encoding="utf-8") as file:
             source = json.load(file)
-        self._packets = deque(source["packets"] if isinstance(source, dict) else source)
+        self._packets = deque(source["packets"])
         self.history_limit = 200
 
     def poll(self, receive, error) -> None:

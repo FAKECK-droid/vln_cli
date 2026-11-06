@@ -9,9 +9,12 @@
 - “调用参数”“返回结果”等界面标题使用中文，双击记录或按 Enter 查看详情。
 - 对话中每个 call_id 对应一张工具卡片，从正在执行更新为完成/失败，显示文字结果并省略图片。
 - 请求历史按响应标识关联完成事件，支持旧响应完成与下一请求开始同批到达；缺少终态证据时标为“结束状态未收到”，不永久显示等待。
-- 空闲后仍可双击或按 Enter 查看模型配置、输入和耗时；只有末次采样时会注明，不冒充最终耗时。
+- 空闲后仍可双击或按 Enter 查看模型配置、输入和耗时；工具详情分别展示排队耗时 wait_ms 和执行耗时 run_ms，0 毫秒是有效值。
+- 工具最终耗时直接来自 Agent 的 tools.finished_calls.run_ms/wait_ms；快速调用无需活动队列采样。完成通知必须包含完整终态字段，缺失字段按协议错误报告。
+- 错误标明组件：SessionManager 会话请求、ResponsesWsTransport 模型 WebSocket、ToolManager 与具体工具函数，以及 CLI 的 ROS 接收、TF、协议解析、发送和本地指令。
+- 会话与传输错误同时显示，完整字段及原始异常类型/信息保留在聊天和 /session 详情中；重复遥测不重复刷屏。工具失败卡显示 ToolManager、函数名、call_id 和原始返回内容。
 - 不记录原始收发包，不提供历史 JSON 页面；界面状态使用中文，工具参数和结果保留原始字段。
-- ROS 由独立接收线程处理，TUI 以 10 Hz 刷新；连续重复遥测只保留最新采样，调用/结果/请求边界和 append 文本不合并。
+- ROS 由独立接收线程处理，TUI 以 10 Hz 刷新；连续重复遥测只保留最新采样，调用/结果/请求边界不合并；正文始终是当前位置的全文。
 - 发送后立即显示“已发送，等待 Agent 处理”；观察到对应请求后才切换到真实模型状态。
 - 每次 CLI 启动首次匹配 Agent 的输入/输出端点后，向 Agent 发送一次“CLI 已连接成功。”提示输入；刷新与断线重连不重复发送，演示/回放模式不发送。
 - 每次发送用户输入（含连接提示）都附加发送时查询的 `map → base_link` 二维 `pose`；TF 缺失、断链或过期时发送 `pose: null`，不阻塞发送。
@@ -48,7 +51,7 @@ ros2 run vln_cli vln_cli --replay /path/to/result.json
 ```
 
 演示和回放也可在安装 Python 包后运行 `python -m vln_cli --demo`，不需要 ROS 环境。
-回放接受 `interaction_update` 数组，或含 `packets` 数组的 JSON 对象；回放不会发布输入。
+回放文件固定为含 `packets` 数组的 JSON 对象；回放不会发布输入。
 
 ## 与现有 Agent 对接
 
@@ -56,18 +59,19 @@ CLI 默认发布 `/vln/user_input`，订阅 `/vln/user_output`；
 自定义话题时与已有 RosTopicInterface 的 `receive_topic/send_topic` 保持对应。
 跨机器须使用兼容的 ROS_DOMAIN_ID、RMW 和可达的 DDS 网络；CLI 不提供网络代理。
 
-直接复用现有 Agent 渠道配置即可，不需要修改 Agent 源码。以下开关决定 CLI 能看到哪些信息：
+CLI 与 vln_agent 必须同时更新到当前协议。以下开关决定 CLI 能看到哪些信息：
 
 - `transmit.request`：模型、推理配置和当前请求。
 - `transmit.response.messages/stream`：完整/流式聊天。
 - `transmit.response.function_calls/tool_outputs`：函数调用与结果。
-- `transmit.tools.definitions/status/queue/finished_calls`：工具详情。
+- `transmit.tools.definitions/status/queue/finished_calls`：工具详情；工具完成状态和最终计时必须启用 finished_calls。
 - `transmit.session.request_status/context_status`：会话、错误、用量和压缩状态。
 - `include_images: false`：终端建议不传图片。CLI 不渲染或上传图片。
 
-支持固定频率全量状态：状态和定义每轮覆盖，文本按 replace 更新，空事件数组不清空已收集的历史。
-full=true 表示全量快照，不会反复清空历史；根据更新的时间戳和回退的 batch_id 识别 Agent 重启。
-同时兼容此前的差量协议：省略字段保持、null 清除、文本 append/replace。
+每轮发送全部已启用状态和工具定义，正文按 response_id/output_index/content_index 直接覆盖为当前全文。
+协议没有 full/op 字段；根据时间戳和回退的 batch_id 识别 Agent 重启。
+未启用的字段省略，null 清除当前状态，空事件数组不清空已收集的历史。
+finished_calls 必须包含 call_id/name/sequence/blocking/state/run_ms/wait_ms。
 
 话题使用 volatile QoS，CLI 加入后接收下一次实时推送；CLI 不补发模型请求以获取历史。
 尚未观察过请求时，/model 显示等待模型信息；当前状态并不包含 CLI 离线期间的完整请求历史。

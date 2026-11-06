@@ -1,4 +1,4 @@
-"""合并全量/差量快照，只保留有界聊天、工具和请求历史。"""
+"""接收当前协议的完整快照，只保留有界聊天、工具和请求历史。"""
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -7,7 +7,7 @@ import json
 from copy import deepcopy
 import time
 
-from .presentation import call_text
+from .presentation import call_text, error_text
 
 Json = dict[str, Any]
 
@@ -40,16 +40,11 @@ class Message:
 
 
 def result_payload(output: Json) -> Any:
-    value = output.get("output")
-    if isinstance(value, list):
-        value = "\n".join(item.get("text", "") for item in value
-                          if item.get("type") == "input_text")
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError:
-            return value
-    return value
+    """Agent 原生结果固定为 content[]，首项是 JSON 业务载荷。"""
+    content = output["output"]
+    if content[0]["type"] != "input_text":
+        raise ValueError("tool_output 首项必须为 input_text JSON 载荷")
+    return json.loads(content[0]["text"])
 
 
 class ViewState:
@@ -70,6 +65,7 @@ class ViewState:
         self.request: Json | None = None
         self.model_info: Json = {}
         self.request_status: Json = {}
+        self._active_errors: Json = {}
         self.context_status: Json = {}
         self.tool_status: Json = {}
         self.tool_queue: Json = {"waiting": [], "running": []}
@@ -118,12 +114,13 @@ class ViewState:
                 del self.calls[key]
 
     def _restart(self) -> None:
-        # 只有批次回退且时间更新才视为 Agent 重启；full 本身仅表示全量快照。
+        # 只有批次回退且时间更新才视为 Agent 重启。
         self.epoch += 1
         self.request = None
         self.current_request_key = None
         self.model_info = {}
         self.request_status = {}
+        self._active_errors = {}
         self.context_status = {}
         self.tool_status = {}
         self.tool_queue = {"waiting": [], "running": []}
@@ -155,7 +152,7 @@ class ViewState:
 
         # 完成事件按响应 ID 回填所有对应历史，不能只更新“当前记录”。
         for item in self.requests.values():
-            if item.get("epoch", self.epoch) != self.epoch:
+            if item["epoch"] != self.epoch:
                 continue
             if item.get("response_id") in confirmed and item["state"] not in {"failed", "interrupted"}:
                 item["state"] = "finished"
@@ -187,6 +184,7 @@ class ViewState:
                     record["response_id"] = active_id
                 if status.get("last_error"):
                     record["state"] = "failed"
+                    record["error"] = status["last_error"]
                 elif status.get("request_interrupted"):
                     record["state"] = "interrupted"
                 elif (record.get("response_id") in confirmed or status.get("response_ready") or
@@ -202,7 +200,7 @@ class ViewState:
         while len(self.requests) > self.history_limit:
             self.requests.popitem(last=False)
 
-    def _message_part(self, part: Json, stamp: str, full: bool) -> None:
+    def _message_part(self, part: Json, stamp: str) -> None:
         identity = part.get("response_id", "")
         if not identity or (self.epoch, identity) in self._cleared_responses:
             return
@@ -212,14 +210,8 @@ class ViewState:
             message = Message(key, "assistant", stamp, "streaming")
             self.messages[key] = message
         position = (part.get("output_index", 0), part.get("content_index", 0))
-        text = part.get("text", "")
-        # 快照中的文本是当前全文；旧协议的 append/replace 差量仍可接收。
-        if full or part.get("op", "replace") == "replace":
-            updated = text
-        elif (self.epoch, identity) in self._completed_responses:
-            return
-        else:
-            updated = message.parts.get(position, "") + text
+        # 每个位置始终携带当前全文，直接覆盖。
+        updated = part["text"]
         if message.parts.get(position) != updated:
             message.parts[position] = updated
             message.revision += 1
@@ -257,14 +249,10 @@ class ViewState:
         if "status" in tools:
             self.tool_status = tools["status"] or {}
         response = packet.get("response") or {}
-        full = packet.get("full", False)
         if "stream" in response:
             self.stream = response["stream"]
         for part in response.get("messages", []):
-            self._message_part(part, stamp, full)
-        if full and self.stream and not response.get("messages"):
-            for part in self.stream.get("content", []):
-                self._message_part({**part, "response_id": self.stream.get("response_id")}, stamp, True)
+            self._message_part(part, stamp)
         touched = set()
         for call in response.get("function_calls", []):
             key = call["call_id"]
@@ -277,15 +265,15 @@ class ViewState:
                     self._update_call(call["call_id"], {**call, "state": state}, stamp)
                     touched.add(call["call_id"])
         for call in tools.get("finished_calls", []):
-            values = dict(call)
-            if "run_ms" in call:
-                values["duration_ms"] = call["run_ms"]
-            self._update_call(call["call_id"], values, stamp)
+            for field in ("call_id", "name", "sequence", "blocking", "state",
+                          "wait_ms", "run_ms"):
+                if field not in call:
+                    raise ValueError(f"tools.finished_calls 缺少字段：{field}")
+            self._update_call(call["call_id"], call, stamp)
             touched.add(call["call_id"])
         for output in response.get("tool_outputs", []):
             payload = result_payload(output)
-            state = "failed" if isinstance(payload, dict) and payload.get("ok") is False else "finished"
-            self._update_call(output["call_id"], {"state": state, "result": payload}, stamp)
+            self._update_call(output["call_id"], {"result": payload}, stamp)
             touched.add(output["call_id"])
         if "definitions" in tools:
             for key, call in self.calls.items():
@@ -313,6 +301,12 @@ class ViewState:
             while len(self._completed_responses) > self.history_limit * 2:
                 self._completed_responses.popitem(last=False)
         self._observe_request(previous_request, response, stamp)
+        current_errors = {item["path"]: item for item in self.errors}
+        for path, item in current_errors.items():
+            if item != self._active_errors.get(path):
+                self.local_message("error", error_text(
+                    item["source"], {"field": path, "error": item["error"]}))
+        self._active_errors = current_errors
         self._prune()
         self._cleared_calls.intersection_update(self.calls)
         self.revision += 1
@@ -329,6 +323,9 @@ class ViewState:
         if previous.get("state") in ("finished", "failed", "interrupted"):
             if values.get("state") not in ("finished", "failed", "interrupted"):
                 values.pop("state", None)
+                # 旧活动采样不能覆盖已收到的固定终态计时及组件来源。
+                for key in ("run_ms", "wait_ms"):
+                    values.pop(key, None)
             if previous.get("state") == "failed" and values.get("state") == "finished":
                 values.pop("state")
         self.calls[identity] = {"first_seen": stamp, "state": "submitted", **previous,
@@ -350,9 +347,16 @@ class ViewState:
             message.revision += 1
 
     @property
-    def error(self) -> Any:
-        return self.request_status.get("last_error") or self.request_status.get(
-            "transport", {}).get("last_error")
+    def errors(self) -> list[Json]:
+        """会话与传输错误分别返回，避免一个 last_error 掩盖另一个。"""
+        transport = self.request_status.get("transport") or {}
+        return [{"source": source, "path": path, "error": value}
+                for source, path, value in (
+                    ("SessionManager（会话请求）", "session.request_status.last_error",
+                     self.request_status.get("last_error")),
+                    ("ResponsesWsTransport（模型 WebSocket 传输）",
+                     "session.request_status.transport.last_error", transport.get("last_error")))
+                if value]
 
     def snapshot(self) -> Json:
         return {

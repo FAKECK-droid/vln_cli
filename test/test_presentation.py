@@ -12,11 +12,11 @@ def test_nested_tool_results_preserve_fields_and_hide_images_without_mutating_so
     assert arguments('{"position":{"x":1}}') == "position：\n  x：1"
 
 
-def test_terminal_sample_is_not_reported_as_final_duration():
-    assert call_duration({"state": "finished", "run_ms": 0}) == "未上报"
-    assert call_duration({"state": "finished", "run_ms": 20}) == "≥20 毫秒"
-    assert call_duration({"state": "finished", "duration_ms": 12}) == "12 毫秒"
+def test_final_duration_uses_required_native_run_ms():
+    assert call_duration({"state": "finished", "run_ms": 0}) == "0 毫秒"
+    assert call_duration({"state": "finished", "run_ms": 20}) == "20 毫秒"
     assert call_duration({"state": "waiting", "wait_ms": 50, "run_ms": 0}) == "50 毫秒"
+
 
 
 def test_request_inputs_are_readable_and_do_not_render_image_content():
@@ -54,3 +54,17 @@ def test_arbitrary_tool_fields_and_values_remain_native_at_every_depth():
     result = call_text({"call_id": "c", "name": "arbitrary", "state": "finished", "result": value})
     assert "已完成" in result and "state：running" in result
     assert "是否成功" not in result and "图像宽度" not in result
+
+
+def test_final_zero_duration_and_separate_wait_time_and_error_source():
+    call = {"call_id": "c", "name": "capture_image", "state": "failed",
+            "run_ms": 0, "wait_ms": 35, "code": "TOOL_QUEUE_FULL",
+            "message": "队列已满"}
+    assert call_duration(call) == "0 毫秒"
+    detail = call_text(call, detail=True)
+    for expected in ("错误来源：ToolManager / capture_image", "TOOL_QUEUE_FULL", "队列已满",
+                     "执行耗时：0 毫秒", "排队耗时：35 毫秒", "call_id：c"):
+        assert expected in detail
+    import pytest
+    with pytest.raises(KeyError, match="run_ms"):
+        call_duration({"state": "finished"})

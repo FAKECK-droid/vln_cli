@@ -126,14 +126,23 @@ def arguments(value):
     return describe(without_images(value), translate=False)
 
 
+def error_text(source, error):
+    """标注真实组件，保留完整错误字段及原始异常类型/信息。"""
+    if isinstance(error, BaseException):
+        detail = f"{type(error).__name__}: {error}"
+    else:
+        detail = describe(without_images(error), translate=False)
+    return "错误来源：" + source + "\n" + detail
+
+
 def call_duration(call):
-    if call.get("state") in ("finished", "failed"):
-        if "duration_ms" in call:
-            return f"{call['duration_ms']:g} 毫秒"
-        sample = call.get("run_ms", 0)
-        return f"≥{sample:g} 毫秒" if sample else "未上报"
-    elapsed = call.get("wait_ms" if call.get("state") == "waiting" else "run_ms")
-    return f"{elapsed:g} 毫秒" if elapsed is not None else "—"
+    state = call["state"]
+    if state == "submitted":
+        return "等待工具状态"
+    if state == "interrupted":
+        return "已中断"
+    elapsed = call["wait_ms" if state == "waiting" else "run_ms"]
+    return f"{elapsed:g} 毫秒"
 
 
 def call_text(call, detail=False):
@@ -142,9 +151,16 @@ def call_text(call, detail=False):
     lines = [name + " · " + status]
     if call.get("description"):
         lines.append(call["description"])
+    if call.get("state") == "failed":
+        lines += [error_text("ToolManager / " + name, {
+            "name": name, "call_id": call["call_id"],
+            **{key: call[key] for key in ("code", "message") if key in call}})]
     if detail:
+        wait = call.get("wait_ms")
         lines += ["函数：" + call.get("name", "未知"), "调用标识：" + call["call_id"],
-                  "记录时间：" + local_time(call.get("first_seen")), "耗时：" + call_duration(call)]
+                  "记录时间：" + local_time(call.get("first_seen")),
+                  "执行耗时：" + ("尚未开始" if call.get("state") == "waiting" else call_duration(call)),
+                  "排队耗时：" + (f"{wait:g} 毫秒" if wait is not None else "等待工具状态")]
         if "sequence" in call:
             lines.append("调用序号：" + str(call["sequence"]))
     if "arguments" in call:
@@ -200,5 +216,7 @@ def request_text(record):
             "\n开始时间：" + local_time(record["time_stamp"]) +
             "\n请求耗时：" + elapsed +
             ("\n响应标识：" + record["response_id"] if record.get("response_id") else "") +
+            ("\n\n" + error_text("SessionManager（会话请求）", record["error"])
+             if record.get("error") else "") +
             "\n\n模型与请求配置\n" + describe(options) +
             "\n\n输入内容\n" + input_text(request.get("input")))

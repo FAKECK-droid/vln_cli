@@ -20,7 +20,7 @@ from textual.widgets import (
 
 from .state import Message, ViewState, user_input
 from .presentation import (arguments, call_duration, call_text, describe, local_time,
-                           request_text, state_name, tool_name, without_images)
+                           request_text, state_name, tool_name, without_images, error_text)
 
 COMMANDS = {
     "/help": "显示指令和快捷键",
@@ -250,7 +250,7 @@ class VLNConsole(App):
             self.connection_info = self.bridge.connection()
             self._notify_first_connection()
         except Exception as error:
-            self._error(str(error))
+            self._error(error_text("vln_cli.VLNConsole / 接收与刷新", error))
         self._render_telemetry()
         signature = tuple((key, message.revision, message.state)
                           for key, message in self.state.messages.items())
@@ -332,11 +332,17 @@ class VLNConsole(App):
         self._set("#ribbon", ribbon)
         self._set("#clock", Text(datetime.now(ZoneInfo("Asia/Shanghai")).strftime(
             "%m-%d  %H:%M:%S  CST"), style="#8fa0b9"))
-        error = state.error
-        self.query_one("#error-banner").display = bool(error)
-        if error:
-            self._set("#error-banner", "  ⚠ " + short(
-                describe(error) if isinstance(error, dict) else error, 160))
+        errors = state.errors
+        self.query_one("#error-banner").display = bool(errors)
+        if errors:
+            summaries = []
+            for item in errors:
+                value = item["error"]
+                detail = (" · ".join(str(value[key]) for key in ("code", "stage", "message")
+                                    if value.get(key) is not None)
+                          if isinstance(value, dict) else str(value))
+                summaries.append("⚠ " + item["source"] + "：" + short(detail, 160))
+            self._set("#error-banner", "\n".join(summaries))
         model_card = Text("模型\n", style="bold #66dfd5")
         model_card.append(str(model) + "\n", style="bold #edf2ff")
         effort = state.model_info.get("reasoning", {}).get("effort", "—")
@@ -407,7 +413,10 @@ class VLNConsole(App):
         if active == "request-tab":
             self._render_requests()
         elif active == "session-tab":
-            text = ("会话状态\n" + describe(self.state.request_status) +
+            errors = "\n\n".join(error_text(
+                item["source"], {"field": item["path"], "error": item["error"]})
+                for item in self.state.errors) or "当前无错误"
+            text = ("错误详情\n" + errors + "\n\n会话状态\n" + describe(self.state.request_status) +
                     "\n\n上下文\n" + describe(self.state.context_status) +
                     "\n\nROS 话题\n" + describe(self.connection_info))
             self._set("#session-detail", Text(text))
@@ -512,7 +521,7 @@ class VLNConsole(App):
                     self.state.local_message("system",
                         "当前输入话题没有匹配订阅者，本次发布不会自动重发。连接后请重新发送。")
             except Exception as error:
-                self.state.local_message("error", str(error))
+                self.state.local_message("error", error_text("vln_cli.VLNConsole / 输入发送", error))
             return
         try:
             args = shlex.split(line)
@@ -560,4 +569,5 @@ class VLNConsole(App):
                 raise ValueError("未知指令：" + command + "。输入 /help 查看可用指令。")
             self.state.local_message("system", reply)
         except (ValueError, OSError) as error:
-            self.state.local_message("error", str(error))
+            self.state.local_message("error", error_text(
+                "vln_cli.VLNConsole / 本地指令 " + line.split()[0], error))

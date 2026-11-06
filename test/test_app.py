@@ -155,8 +155,9 @@ async def test_tool_chat_card_updates_in_place_with_text_result_only():
         for batch in range(11, 14):
             stamp = (baseline + timedelta(seconds=batch)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             app.state.apply({"type": "interaction_update", "time_stamp": stamp,
-                "batch_id": batch, "full": True, "tools": {"finished_calls": [
-                    {"call_id": "actual-camera", "state": "finished"}]},
+                "batch_id": batch, "tools": {"finished_calls": [
+                    {"call_id": "actual-camera", "name": "capture_image", "state": "finished",
+                     "sequence": 0, "blocking": False, "wait_ms": 2, "run_ms": 12}]},
                 "response": {"tool_outputs": [{"call_id": "actual-camera", "output": [
                     {"type": "input_text", "text": '{"ok":true,"width":1280,"height":720}'},
                     {"type": "input_image", "image_url": "data:image/jpeg;base64,SECRET"}]}]}})
@@ -261,3 +262,21 @@ async def test_first_complete_ros_match_sends_one_connection_notice_even_after_r
         bridge.pose = None
         await app.execute("没有 TF 也正常发送")
         assert json.loads(bridge.sent[-1][0]["content"][0]["text"])["pose"] is None
+
+
+@pytest.mark.asyncio
+async def test_both_remote_error_sources_are_visible_and_full_details_survive_banner_shortening():
+    app = VLNConsole(DemoBridge())
+    async with app.run_test(size=(160, 48)) as pilot:
+        await pilot.pause(.1)
+        app.state.request_status = {
+            "last_error": {"code": "REQUEST_TIMEOUT", "message": "会话超时"},
+            "transport": {"last_error": {"stage": "read", "message": "WebSocket disconnected"}}}
+        await app.refresh_tick()
+        banner = app.query_one("#error-banner", Static).content
+        assert "SessionManager" in str(banner) and "ResponsesWsTransport" in str(banner)
+        assert "REQUEST_TIMEOUT" in str(banner) and "WebSocket disconnected" in str(banner)
+        await app.execute("/session")
+        detail = app.query_one("#session-detail", Static).content.plain
+        assert "session.request_status.transport.last_error" in detail
+        assert "SessionManager" in detail and "ResponsesWsTransport" in detail

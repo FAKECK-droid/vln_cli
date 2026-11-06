@@ -3,6 +3,7 @@ import sys
 
 from .app import VLNConsole
 from .bridge import DemoBridge, ReplayBridge, RosBridge
+from .presentation import error_text
 
 
 def main(args=None):
@@ -19,6 +20,8 @@ def main(args=None):
     if (options.demo or options.replay) and ros_args:
         parser.error("离线模式不接收 ROS 参数")
     bridge = None
+    source = ("DemoBridge" if options.demo else "ReplayBridge" if options.replay else "RosBridge")
+    source = "vln_cli." + source + " / 初始化"
     try:
         if options.demo:
             bridge = DemoBridge()
@@ -27,10 +30,11 @@ def main(args=None):
         else:
             bridge = RosBridge(options.input_topic, options.output_topic,
                                options.history_limit, ros_args)
+        source = "vln_cli.VLNConsole / 运行"
         VLNConsole(bridge, history_limit=(
             options.history_limit if options.demo or options.replay else bridge.history_limit)).run()
     except (ImportError, OSError, ValueError, RuntimeError) as error:
-        print(f"vln_cli: {error}", file=sys.stderr)
+        print(error_text(source, error), file=sys.stderr)
         return 1
     finally:
         if bridge is not None:

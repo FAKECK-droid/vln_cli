@@ -4,7 +4,7 @@ from vln_cli.bridge import replaceable_telemetry
 
 
 def snapshot(batch=1):
-    return {"type": "interaction_update", "batch_id": batch, "full": False,
+    return {"type": "interaction_update", "batch_id": batch,
             "request": None, "session": {"request_status": {
                 "state": "idle", "request_elapsed_ms": batch}, "context_status": {}},
             "tools": {"queue": {"waiting": [], "running": []}, "definitions": []},
@@ -19,7 +19,6 @@ def test_only_redundant_telemetry_can_be_coalesced():
         ("response", "tool_outputs", [{"call_id": "c1"}]),
         ("response", "id", "r1"),
         ("tools", "finished_calls", [{"call_id": "c1", "state": "finished"}]),
-        ("response", "messages", [{"op": "append", "text": "新内容"}]),
     ]:
         changed = deepcopy(after)
         changed[section][key] = value
@@ -46,3 +45,23 @@ def test_request_state_and_tool_boundaries_survive_coalescing():
     # 同参数的下一轮耗时回退也必须保留，不能掩盖请求边界。
     later["session"]["request_status"]["request_elapsed_ms"] = 0
     assert not replaceable_telemetry(changed, later)
+
+
+def test_decode_and_protocol_errors_keep_topic_component_and_exception():
+    import threading
+    from collections import deque
+    from types import SimpleNamespace
+    from vln_cli.bridge import RosBridge
+    from vln_cli.state import ViewState
+    bridge = RosBridge.__new__(RosBridge)
+    bridge._lock = threading.Lock()
+    bridge._incoming, bridge._errors = deque(), deque()
+    bridge._received, bridge._coalesced = 0, 0
+    bridge.output_topic = "/test/output"
+    bridge._receive(SimpleNamespace(data="{"))
+    bridge._receive(SimpleNamespace(data='{"type":"wrong","batch_id":2}'))
+    errors = []
+    bridge.poll(ViewState().apply, errors.append)
+    assert len(errors) == 2
+    assert any("vln_cli.RosBridge" in e and "/test/output" in e and "JSONDecodeError" in e for e in errors)
+    assert any("vln_cli.ViewState" in e and "batch_id=2" in e and "ValueError" in e for e in errors)

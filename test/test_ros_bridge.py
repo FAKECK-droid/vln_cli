@@ -31,7 +31,7 @@ def test_real_ros_topics_without_agent_or_network(monkeypatch):
         inputs = user_input("只测试 ROS 序列化，不调用模型")
         bridge.send(inputs)
         packet = {"type": "interaction_update", "batch_id": 1,
-                  "time_stamp": "2026-10-28T06:00:00.000Z", "full": True}
+                  "time_stamp": "2026-10-28T06:00:00.000Z"}
         publisher.publish(String(data=json.dumps(packet)))
         deadline = time.monotonic() + 4
         while not received or not outgoing:
@@ -79,7 +79,7 @@ def test_cli_reconnects_to_existing_peer_and_accepts_periodic_full_state(monkeyp
                     if publisher.get_subscription_count():
                         publisher.publish(String(data=json.dumps({
                             "type": "interaction_update", "time_stamp": utc_now(), "batch_id": batch,
-                            "full": False, "request": {"model": "local-test", "input": []},
+                            "request": {"model": "local-test", "input": []},
                             "session": {"request_status": {"state": "generating", "request_elapsed_ms": batch}},
                             "tools": {"definitions": [{"name": "capture_image"}], "queue": {
                                 "waiting": [], "running": [{"call_id": "one-call", "name": "capture_image"}]}}})))
@@ -130,6 +130,9 @@ def test_background_receive_continues_while_ui_is_paused_and_keeps_tool_result(m
             if batch == 20:
                 packet["response"]["tool_outputs"] = [{"call_id": "c1", "output": [
                     {"type": "input_text", "text": '{"ok":true}'}]}]
+                packet["tools"]["finished_calls"] = [{
+                    "call_id": "c1", "name": "capture_image", "sequence": 0, "blocking": False,
+                    "state": "finished", "wait_ms": 0, "run_ms": 0}]
             publisher.publish(String(data=json.dumps(packet)))
             time.sleep(.004)
         while bridge.connection()["received_packets"] < 50:
