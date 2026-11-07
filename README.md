@@ -7,7 +7,7 @@
 - 中文模型、上下文、连接和状态详情；保留模型名、原始函数名等技术标识。
 - 工具历史保留 Agent 的原始函数名、参数/结果字段名和字段值，嵌套字段与新增字段动态展示；工具说明直接使用 tools 的 description。
 - “调用参数”“返回结果”等界面标题使用中文，双击记录或按 Enter 查看详情。
-- 对话中每个 call_id 对应一张工具卡片，从正在执行更新为完成/失败，显示文字结果并省略图片。
+- 对话中每个 call_id 对应一张工具卡片，从正在执行更新为完成/失败；展示完整业务结果、data 与按顺序对应的 images 元数据，隐藏图片字节。
 - 请求历史按响应标识关联完成事件，支持旧响应完成与下一请求开始同批到达；缺少终态证据时标为“结束状态未收到”，不永久显示等待。
 - 空闲后仍可双击或按 Enter 查看模型配置、输入和耗时；工具详情分别展示排队耗时 wait_ms 和执行耗时 run_ms，0 毫秒是有效值。
 - 工具最终耗时直接来自 Agent 的 tools.finished_calls.run_ms/wait_ms；快速调用无需活动队列采样。完成通知必须包含完整终态字段，缺失字段按协议错误报告。
@@ -78,17 +78,88 @@ finished_calls 必须包含 call_id/name/sequence/blocking/state/run_ms/wait_ms�
 本包不为补充遥测自动发送模型请求。空字段显示为“未收到”，不会猜测模型。
 ROS 匹配端点与模型 WebSocket 连接分别显示；ROS 已连接不代表模型服务已连接。
 
-发布的 JSON 文本是原生 input 数组：
+用户输入、机器事件和工具结果使用 vln_agent 统一业务 JSON；CLI 只接入当前规范。
+
+| 公共字段 | 含义 |
+| --- | --- |
+| source | 用户为 user；机器事件和工具结果为 robot |
+| time_stamp | 本条信息生成时间，UTC 三位毫秒 |
+| data | 具体载荷；用户纯文字输入为 {} |
+| pose | 小车二维位姿，含 frame_id/x/y/yaw，可附独立采样时间 |
+| images | 含图片时必需；按原生图片顺序逐张保存采样时间、位姿和自定义 metadata |
+
+instruction 与 data 同级；origin/event 仅用于机器事件；工具的 ok/code/message 也与 data 同级。
+事件说明放在 data.message，不使用业务 text 字段。原生 input_text.text 仍用于承载这段 JSON。
+
+CLI 发布原生 input[]；每次发送（包括首次连接提示）的业务 JSON 为：
 
 ```json
-[{"role":"user","content":[{"type":"input_text","text":"{\"source\":\"user\",\"time_stamp\":\"2026-10-28T06:00:00.000Z\",\"instruction\":\"检查门口\"}"}]}]
+{
+  "source": "user",
+  "time_stamp": "2026-11-07T02:30:00.125Z",
+  "instruction": "检查门口",
+  "data": {},
+  "pose": {
+    "frame_id": "map",
+    "x": 1.2,
+    "y": 2.3,
+    "yaw": 0.5,
+    "time_stamp": "2026-11-07T02:30:00.080Z"
+  }
+}
 ```
 
-位姿放在上述 `input_text.text` 内的业务 JSON 中，与 `instruction` 同级，遵循 `vln_agent/docs/AGENT_PLAN.md` 第 2.2 节：
+外层为 [{"role":"user","content":[{"type":"input_text","text":"上述 JSON 的序列化文本"}]}]。
+用户输入不附加 origin/event。TF 不可用时 pose 为 null，具体载荷仍保留 data: {}。
+
+机器事件也由原生 role: user 输入项承载，CLI 根据 source 和 event 显示为“机器事件”：
 
 ```json
-{"source":"user","time_stamp":"2026-10-29T06:00:00.123Z","instruction":"检查门口","pose":{"frame_id":"map","x":1.2,"y":2.3,"yaw":0.5,"time_stamp":"2026-10-29T06:00:00.100Z"}}
+{
+  "source": "robot",
+  "time_stamp": "2026-11-07T02:30:00.125Z",
+  "origin": "ReportNavigationCompleted",
+  "event": "navigation_completed",
+  "data": {
+    "task_id": "nav_12",
+    "message": "已到达目标位置"
+  }
+}
 ```
+
+工具结果保持原生 function_call_output 外层，其 output[] 首项为业务 JSON，后面是同序原生图片项。例如地图工具：
+
+```json
+{
+  "source": "robot",
+  "time_stamp": "2026-11-07T02:30:00.125Z",
+  "ok": true,
+  "data": {
+    "environment_id": "env_12"
+  },
+  "pose": {
+    "frame_id": "map",
+    "x": 1.2,
+    "y": 2.3,
+    "yaw": 0.5
+  },
+  "images": [
+    {
+      "time_stamp": "2026-11-07T02:30:00.080Z",
+      "metadata": {
+        "costmap": "local",
+        "image_width": 592,
+        "image_height": 660,
+        "meters_per_pixel": 0.05
+      }
+    }
+  ]
+}
+```
+
+工具卡片、工具详情、请求历史与 /export 都保留 data、pose、images 的完整结构。
+请求历史中的工具结果同时显示 call_id 和业务内容。即使 include_images: false 将原生图片变成 omitted 标记，
+图片元数据仍显示；CLI 不渲染 Base64 图片，也不把图片元数据从业务结果中删除。
 
 `x/y` 单位为米，`yaw` 单位为弧度。TF2 自动组合 `map → odom → base_link` 等变换链；每次发送重新查询缓存，不等待变换，也不周期发送位姿消息。
 默认 ROS 参数为 `pose_frame: map`、`pose_base_frame: base_link`、`pose_max_age_sec: 2.0`。
@@ -99,7 +170,7 @@ ROS 匹配端点与模型 WebSocket 连接分别显示；ROS 已连接不代表�
 
 接收端按 response_id 和文本位置合并消息、按 call_id 合并工具记录。重复快照不新增对话卡片或重复统计完成数。
 batch_id 允许跳号，因为管理器空轮询也会递增计数；重复/过期批次不会再次拼接。
-工具 run_ms 可能只是活动队列的最后采样；完成时未上报最终时长则显示“未上报”或采样下界，不伪装为总耗时。
+工具完成时直接使用 finished_calls 中固定的 run_ms/wait_ms；活动队列采样不会覆盖终态计时。
 
 ## 指令与快捷键
 

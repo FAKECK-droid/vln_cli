@@ -101,6 +101,8 @@ def test_real_tf_chain_is_composed_and_each_sent_input_uses_latest_pose(bridge):
                 time.sleep(.01)
             business = json.loads(received[index][0]["content"][0]["text"])
             assert business["pose"] == pose
+            assert business["data"] == {} and business["source"] == "user"
+            assert "origin" not in business and "event" not in business
         assert len(received) == 2
     finally:
         bridge.executor.remove_node(peer)

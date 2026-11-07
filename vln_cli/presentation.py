@@ -23,6 +23,7 @@ LABELS = {
     "compact_threshold": "压缩阈值", "type": "类型", "format": "格式",
     "input": "输入内容", "output": "输出内容", "role": "来源", "content": "内容",
     "text": "文本", "instruction": "指令", "source": "来源", "origin": "事件来源",
+    "data": "业务载荷", "pose": "小车位姿", "images": "图片元数据", "metadata": "元数据",
     "previous_response_id": "前次响应标识", "call_id": "调用标识", "arguments": "调用参数",
     "blocking": "阻塞后续工具", "async": "异步调用", "sequence": "调用序号",
     "id": "标识", "input_topic": "输入话题", "output_topic": "输出话题",
@@ -70,7 +71,7 @@ def without_images(value):
         if value.get("type") in IMAGE_TYPES:
             return None
         return {key: shown for key, item in value.items()
-                if key not in ("image_url", "b64_json", "images")
+                if key not in ("image_url", "b64_json")
                 and ((shown := without_images(item)) is not None or item is None)}
     if isinstance(value, list):
         return [shown for item in value if (shown := without_images(item)) is not None or item is None]
@@ -181,7 +182,9 @@ def input_text(inputs):
             lines.append(str(item))
             continue
         if item.get("type") == "function_call_output":
-            lines.append("工具结果 · " + item.get("call_id", ""))
+            payload = json.loads(item["output"][0]["text"])
+            lines.append("工具结果 · " + item["call_id"] + "\n" +
+                         describe(without_images(payload), translate=False))
             continue
         if item.get("type") == "function_call":
             lines.append("工具调用 · " + tool_name(item.get("name")))
@@ -200,7 +203,10 @@ def input_text(inputs):
                 payload = json.loads(text)
             except (json.JSONDecodeError, TypeError):
                 payload = text
-            lines.append(role + "：" + (describe(without_images(payload)) if isinstance(payload, (dict, list)) else str(payload)))
+            source = ("机器事件" if isinstance(payload, dict) and
+                      payload.get("source") == "robot" and "event" in payload else role)
+            lines.append(source + "：" + (
+                describe(without_images(payload)) if isinstance(payload, (dict, list)) else str(payload)))
     return "\n\n".join(lines) or "无文本输入"
 
 

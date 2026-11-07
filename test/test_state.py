@@ -28,6 +28,8 @@ def test_user_input_is_native_and_has_utc_milliseconds():
     assert payload["source"] == "user" and payload["instruction"] == "前往门口"
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", payload["time_stamp"])
     assert payload["pose"] is None
+    assert payload["data"] == {}
+    assert set(payload) == {"source", "time_stamp", "data", "instruction", "pose"}
 
 
 def test_replace_fields_null_request_and_preserve_model_metadata():
@@ -82,9 +84,10 @@ def test_running_snapshot_wins_over_call_submission_and_results_decode():
     state.apply(packet(2, tools={"queue": {"waiting": [], "running": []},
                                 "finished_calls": [finished("c1", state="failed")]},
         response={"tool_outputs": [{"type": "function_call_output", "call_id": "c1",
-                                   "output": [{"type": "input_text", "text": '{"ok": false}'}]}]}))
+                                   "output": [{"type": "input_text", "text": '{"source":"robot","time_stamp":"2026-11-07T02:30:00.125Z","data":{},"ok":false}'}]}]}))
     assert state.calls["c1"]["state"] == "failed"
-    assert state.calls["c1"]["result"] == {"ok": False}
+    assert state.calls["c1"]["result"]["ok"] is False
+    assert state.calls["c1"]["result"]["data"] == {}
 
 
 def test_history_pruning_does_not_drop_active_calls():
@@ -137,7 +140,7 @@ def test_periodic_full_snapshots_keep_histories_and_do_not_duplicate_events():
                    "finished_calls": [finished("camera-1")]},
             response={"id": "r1", "status": "completed", "function_calls": [call],
                 "messages": [part("你好")], "tool_outputs": [{
-                    "call_id": "camera-1", "output": [{"type": "input_text", "text": '{"ok":true,"width":1280}'},
+                    "call_id": "camera-1", "output": [{"type": "input_text", "text": '{"source":"robot","time_stamp":"2026-11-07T02:30:00.125Z","data":{"width":1280},"ok":true,"images":[{"metadata":{"test_index":0}}]}'},
                     {"type": "input_image", "image_url": "data:image/jpeg;base64,PRIVATE_IMAGE"}]}]}))
     assert state.completed_count == 1
     assert len(state.requests) == 1 and next(iter(state.requests.values()))["state"] == "finished"
@@ -179,7 +182,7 @@ def test_failed_tool_is_one_chat_entry_and_stale_queue_cannot_reopen_it():
     state.apply(packet(2, tools={"finished_calls": [finished("c1", state="failed",
         code="IMAGE_TIMEOUT", message="等待首帧超时")]},
         response={"tool_outputs": [{"call_id": "c1", "output": [
-        {"type": "input_text", "text": '{"ok":false,"code":"IMAGE_TIMEOUT","message":"等待首帧超时"}'}]}]}))
+        {"type": "input_text", "text": '{"source":"robot","time_stamp":"2026-11-07T02:30:00.125Z","data":{},"ok":false,"code":"IMAGE_TIMEOUT","message":"等待首帧超时"}'}]}]}))
     state.apply(packet(3, tools={"queue": {"waiting": [], "running": [{"call_id": "c1"}]}}))
     assert len(state.messages) == 1
     assert message.state == "failed" and "等待首帧超时" in message.text
@@ -252,7 +255,8 @@ def test_previous_response_completes_when_next_request_is_in_same_packet():
     state.apply(packet(request={"model": "m", "input": []}, session={"request_status": {
         "state": "generating", "in_flight": True, "current_response_id": "r1", "request_elapsed_ms": 800}}))
     state.apply(packet(2, request={"model": "m", "previous_response_id": "r1", "input": [
-        {"type": "function_call_output", "call_id": "c1", "output": "ok"}]},
+        {"type": "function_call_output", "call_id": "c1", "output": [
+            {"type": "input_text", "text": '{"source":"robot","time_stamp":"2026-11-07T02:30:00.125Z","ok":true,"data":{}}'}]}]},
         session={"request_status": {"state": "generating", "in_flight": True,
                                    "current_response_id": "r2", "request_elapsed_ms": 5},
                  "context_status": {"latest_response_id": "r1"}},
@@ -292,6 +296,7 @@ def test_input_pose_is_inside_business_json_and_keeps_native_fields():
     payload = json.loads(item["content"][0]["text"])
     assert payload["pose"] == pose
     assert payload["instruction"] == "检查门口"
+    assert payload["data"] == {} and "origin" not in payload and "event" not in payload
 
 
 def test_completion_timings_survive_stale_queue_and_fast_call_needs_no_active_sample():
@@ -300,7 +305,7 @@ def test_completion_timings_survive_stale_queue_and_fast_call_needs_no_active_sa
                 "run_ms": 0, "wait_ms": 18,
                 "sequence": 0, "blocking": False}
     state.apply(packet(tools={"finished_calls": [terminal]}, response={"tool_outputs": [
-        {"call_id": "fast", "output": [{"type": "input_text", "text": '{"ok":true}'}]}]}))
+        {"call_id": "fast", "output": [{"type": "input_text", "text": '{"source":"robot","time_stamp":"2026-11-07T02:30:00.125Z","data":{},"ok":true}'}]}]}))
     assert state.calls["fast"]["run_ms"] == 0
     state.apply(packet(2, tools={"queue": {"waiting": [], "running": [
         {"call_id": "fast", "run_ms": 999, "wait_ms": 999}]}}))

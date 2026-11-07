@@ -159,7 +159,7 @@ async def test_tool_chat_card_updates_in_place_with_text_result_only():
                     {"call_id": "actual-camera", "name": "capture_image", "state": "finished",
                      "sequence": 0, "blocking": False, "wait_ms": 2, "run_ms": 12}]},
                 "response": {"tool_outputs": [{"call_id": "actual-camera", "output": [
-                    {"type": "input_text", "text": '{"ok":true,"width":1280,"height":720}'},
+                    {"type": "input_text", "text": '{"source":"robot","time_stamp":"2026-11-07T02:30:00.125Z","data":{"width":1280,"height":720},"ok":true,"images":[{"metadata":{"test_index":0}}]}'},
                     {"type": "input_image", "image_url": "data:image/jpeg;base64,SECRET"}]}]}})
             await app.refresh_tick()
         assert app.bubbles[key] is bubble
@@ -246,6 +246,7 @@ async def test_first_complete_ros_match_sends_one_connection_notice_even_after_r
         payload = json.loads(bridge.sent[0][0]["content"][0]["text"])
         assert payload["instruction"] == "CLI 已连接成功。" and payload["source"] == "user"
         assert payload["pose"] == bridge.pose
+        assert payload["data"] == {} and "origin" not in payload and "event" not in payload
         assert any(m.role == "system" and m.text == "CLI 已连接成功。" for m in app.state.messages.values())
         for _ in range(3):
             await app.refresh_tick()
@@ -258,6 +259,7 @@ async def test_first_complete_ros_match_sends_one_connection_notice_even_after_r
         await app.execute("查询当前状态")
         payload = json.loads(bridge.sent[-1][0]["content"][0]["text"])
         assert payload["pose"] == bridge.pose
+        assert payload["data"] == {} and "origin" not in payload and "event" not in payload
         assert len(bridge.sent) == 2
         bridge.pose = None
         await app.execute("没有 TF 也正常发送")
@@ -280,3 +282,43 @@ async def test_both_remote_error_sources_are_visible_and_full_details_survive_ba
         detail = app.query_one("#session-detail", Static).content.plain
         assert "session.request_status.transport.last_error" in detail
         assert "SessionManager" in detail and "ResponsesWsTransport" in detail
+
+
+@pytest.mark.asyncio
+async def test_current_business_schema_is_visible_in_tool_and_request_panels(tmp_path):
+    from test_payloads import STAMP, IMAGES, POSE, native_content
+    app = VLNConsole(DemoBridge())
+    async with app.run_test(size=(170, 52)) as pilot:
+        await pilot.pause(.2)
+        baseline = datetime.fromisoformat(app.state.last_stamp.replace("Z", "+00:00"))
+        stamp = (baseline + timedelta(seconds=10)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        payload = {"source": "robot", "time_stamp": STAMP, "ok": True,
+                   "data": {"environment_id": "env_12"}, "pose": POSE, "images": IMAGES}
+        event = {"source": "robot", "time_stamp": STAMP, "origin": "ReportNavigationCompleted",
+                 "event": "navigation_completed", "data": {"message": "已到达目标位置"}}
+        output = {"type": "function_call_output", "call_id": "surroundings",
+                  "output": native_content(payload, omitted=True)}
+        app.state.apply({"type": "interaction_update", "time_stamp": stamp, "batch_id": 20,
+                         "request": {"model": "test", "input": [
+                             {"role": "user", "content": native_content(event)}, output]},
+                         "tools": {"finished_calls": [{
+                             "call_id": "surroundings", "name": "get_surroundings", "sequence": 1,
+                             "blocking": False, "state": "finished", "wait_ms": 0, "run_ms": 8}]},
+                         "response": {"tool_outputs": [output]}})
+        await app.refresh_tick()
+        await app.execute("/tools")
+        app.selected_call = "surroundings"
+        app._render_inspector()
+        detail = app.query_one("#call-detail", Static).content.plain
+        assert "environment_id：env_12" in detail and "metadata：" in detail
+        assert detail.index("costmap：local") < detail.index("pair_id：12")
+        await app.execute("/request")
+        detail = app.query_one("#request-detail", Static).content.plain
+        assert "机器事件：" in detail and "ReportNavigationCompleted" in detail
+        assert "工具结果 · surroundings" in detail and "environment_id：env_12" in detail
+        assert "SECRET" not in detail
+        path = tmp_path / "current-schema.json"
+        await app.execute("/export " + str(path))
+        exported = json.loads(path.read_text())
+        saved = next(call for call in exported["tools"]["calls"] if call["call_id"] == "surroundings")
+        assert saved["result"] == payload

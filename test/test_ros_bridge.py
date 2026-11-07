@@ -129,7 +129,7 @@ def test_background_receive_continues_while_ui_is_paused_and_keeps_tool_result(m
             packet["time_stamp"] = f"2026-10-29T09:00:00.{batch:03d}Z"
             if batch == 20:
                 packet["response"]["tool_outputs"] = [{"call_id": "c1", "output": [
-                    {"type": "input_text", "text": '{"ok":true}'}]}]
+                    {"type": "input_text", "text": '{"source":"robot","time_stamp":"2026-11-07T02:30:00.125Z","data":{},"ok":true}'}]}]
                 packet["tools"]["finished_calls"] = [{
                     "call_id": "c1", "name": "capture_image", "sequence": 0, "blocking": False,
                     "state": "finished", "wait_ms": 0, "run_ms": 0}]

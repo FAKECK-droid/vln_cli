@@ -239,7 +239,15 @@ class DemoBridge:
                    "finished_calls": [{"call_id": "demo-camera", "name": "capture_image",
                        "sequence": 0, "blocking": False, "state": "finished",
                        "wait_ms": 0, "run_ms": 450}]},
-            response={"id": "demo-welcome", "status": "completed", "messages": [
+            response={"id": "demo-welcome", "status": "completed",
+                "tool_outputs": [{"type": "function_call_output", "call_id": "demo-camera", "output": [
+                    {"type": "input_text", "text": json.dumps({
+                        "source": "robot", "time_stamp": utc_now(), "ok": True, "data": {},
+                        "images": [{"time_stamp": utc_now(), "metadata": {
+                            "pair_id": 12, "queue_index": 0, "queue_size": 24,
+                            "image_age_sec": .04}}]}, ensure_ascii=False)},
+                    {"type": "input_image", "omitted": True}]}],
+                "messages": [
                 {"response_id": "demo-welcome", "output_index": 0, "content_index": 0,
                  "type": "output_text", "text":
                     "### 控制台已就绪\n这是 **离线演示**，没有连接机器人或模型。\n\n"

@@ -18,7 +18,8 @@ def utc_now() -> str:
 
 def user_input(instruction: str, pose: Json | None = None) -> list[Json]:
     """每次发布的 data 是原生 Responses input[] 数组的 JSON 文本。"""
-    payload = {"source": "user", "time_stamp": utc_now(), "instruction": instruction, "pose": pose}
+    payload = {"source": "user", "time_stamp": utc_now(), "data": {},
+               "instruction": instruction, "pose": pose}
     return [{"role": "user", "content": [
         {"type": "input_text", "text": json.dumps(payload, ensure_ascii=False)}
     ]}]
